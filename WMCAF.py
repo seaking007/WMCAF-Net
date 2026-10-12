@@ -354,8 +354,6 @@ class vss(nn.Module):
 
 
 
-
-
 class DWT_Function(Function):
     # 定义前向传播静态方法
     @staticmethod
@@ -518,7 +516,7 @@ class IDWT_2D(nn.Module):
         return IDWT_Function.apply(x, self.filters)
 
 
-class DLK(nn.Module):
+class DSA(nn.Module):
     def __init__(self, dim):
         super().__init__()
         # 初始化第一个深度可分离卷积层
@@ -561,9 +559,10 @@ class DLK(nn.Module):
         return output
 
 
-class ChannelWeights(nn.Module):
+
+class MPCA(nn.Module):
     def __init__(self, dim, reduction=1):
-        super(ChannelWeights, self).__init__()
+        super(MPCA, self).__init__()
         self.dim = dim
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.max_pool = nn.AdaptiveMaxPool2d(1)
@@ -585,6 +584,8 @@ class ChannelWeights(nn.Module):
         return channel_weights
 
 
+
+
 # dkl空间+FCM_通道
 class CAFM(nn.Module):
     def __init__(self, dim, reduction=1, eps=1e-8):
@@ -593,8 +594,8 @@ class CAFM(nn.Module):
         self.weights = nn.Parameter(torch.ones(2, dtype=torch.float32), requires_grad=True)
         self.eps = eps
         # self.spatial_weights = SpatialWeights(dim=dim, reduction=reduction)
-        self.channel_weights = ChannelWeights(dim=dim, reduction=reduction)
-        self.dkl = DLK(dim=dim)
+        self.channel_weights = MPCA(dim=dim, reduction=reduction)
+        self.dkl = DSA(dim=dim)
         self.apply(self._init_weights)
         self.fusion_conv = nn.Conv2d(dim * 2, dim, kernel_size=1)  # 1x1卷积用于融合
 
@@ -617,11 +618,31 @@ class CAFM(nn.Module):
 
     def forward(self, x1, x2):
         weights = nn.ReLU()(self.weights)
+
         channel_weights = self.channel_weights(x1, x2)
+
+
         x1_1 = x1 + channel_weights[1] * x2
         x2_1 = x2 +  channel_weights[0] * x1
-        out=self.dkl(x1_1,x2_1)
+        out=self.dsa(x1_1,x2_1)
+
+
+
         return out
+
+class CatConvFusion(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.fuse = nn.Sequential(
+            nn.Conv2d(dim * 2, dim, kernel_size=1, bias=False),
+            nn.BatchNorm2d(dim),
+            nn.ReLU(inplace=True)
+        )
+
+    def forward(self, x1, x2):
+        return self.fuse(torch.cat([x1, x2], dim=1))
+
+
 
 
 class WaveMamhba(nn.Module):
@@ -654,6 +675,8 @@ class WaveMamhba(nn.Module):
 
         self.HV = Conv2d_Hori_Veri_Cross(ch_in, ch_in)
         self.DC = Conv2d_Diag_Cross(ch_in, ch_in)
+
+
 
         self.mlp = DWConv(ch_in)
         self.bn_re = nn.Sequential(
@@ -751,6 +774,7 @@ class WMCAF(nn.Module):
 
         dims = [32, 64, 128, 256, 512]
 
+
         self.maxpool = nn.MaxPool2d(2)
         self.upsample = nn.UpsamplingBilinear2d(scale_factor=2)
         self.e1 = nn.Sequential(
@@ -767,6 +791,7 @@ class WMCAF(nn.Module):
         self.e4 = nn.Sequential(
             WaveMamhba(dims[2], dims[3], downsample=2),
 
+
         )
         self.e5 = nn.Sequential(
             WaveMamhba(dims[3], dims[4], downsample=2),
@@ -778,6 +803,7 @@ class WMCAF(nn.Module):
         )
         self.d4 = nn.Sequential(
             WaveMamhba(dims[3], dims[2]),
+
 
         )
         self.d3 = nn.Sequential(
@@ -832,10 +858,10 @@ if __name__ == '__main__':
     ras = WMCAF(input_channels=3).cuda()
     input_tensor = torch.randn(1, 3, 256, 256).cuda()
     output = ras(input_tensor)
+    # print(output)
+    # print(ras)
 
     from thop import profile
 
     flops, params = profile(ras, (input_tensor,))
     print('Flops: %.2f G, Params: %.2f M' % (flops / 1e9, params / 1e6))
-    # print(ras)
-
